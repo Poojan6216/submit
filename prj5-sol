@@ -1,0 +1,214 @@
+(1)
+category_items1(_Category, []) -> [];
+category_items1(Category, [[Category|Item]|Rest]) ->
+    [Item|category_items1(Category, Rest)];
+category_items1(Category, [_|Rest]) ->
+    category_items1(Category, Rest).
+category_items1_test_() ->
+    Items = [        [cookware, ?CW123],
+        [apparel, ?AP723],
+        [food, ?FD825],
+        [tool, ?TL456],
+        [cookware, ?CW126],
+        [apparel, ?AP273],
+        [food, ?FD285],
+        [cookware, ?CW127],
+        [apparel, ?AP932]
+    ],
+    TestCases = [        {cookware_empty, [cookware, []], []},
+        {cookware_items, [cookware, Items], [?CW123, ?CW126, ?CW127]},
+        {apparel_items, [apparel, Items], [?AP723, ?AP273, ?AP932]},
+        {food_items, [food, Items], [?FD825, ?FD285]},
+        {tool_items, [tool, Items], []}
+    ],
+    make_tests(fun category_items1/2, TestCases).
+
+(2) 
+category_items2(Category, Items) ->
+    lists:filter(fun([Cat | _]) -> Cat == Category end, Items).
+-ifdef(test_category_items2).
+category_items2_test_() ->
+    make_tests(fun category_items2/2, category_items_test_specs()).
+-endif. %test_category_items2
+
+(3)
+category_items3(Category, Items) ->
+    [X || {Category0, X} <- Items, Category =:= Category0].
+
+-ifdef(test_category_items3).
+category_items3_test_() ->
+    make_tests(fun category_items3/2, category_items_test_specs()).
+-endif. %test_category_items3
+
+(4)
+delete_item(_Sku, []) -> [];
+delete_item(Sku, [Item|Items]) ->
+    case Item#item.sku of
+        Sku -> delete_item(Sku, Items);
+        _ -> [Item|delete_item(Sku, Items)]
+    end.
+
+delete_item_test_specs() -> 
+    Items = ?Items,
+    [
+     { delete_last, 
+       [ fd285, Items ], 
+       [ ?CW123, ?CW126, ?AP723, ?CW127, ?AP273, ?AP932 ]
+     },
+     { delete_intermediate,
+       [ ap723, Items ], 
+       [ ?CW123, ?CW126, ?CW127, ?AP273, ?FD285, ?AP932 ]
+     },
+     { delete_nonexisting, [ ap111, Items ], Items }
+    ].
+
+-ifdef(test_delete_item).
+delete_item_test_() ->
+    make_tests(fun delete_item/2, delete_item_test_specs()).
+-endif. %test_delete_item
+
+(5)
+upsert_item(Item, Items) ->
+    case lists:keyfind(sku, 1, Items) of
+        false -> Items ++ [Item];
+        {_, ExistingItem} -> lists:keyreplace(sku, 1, Items, Item, ExistingItem)
+    end.
+upsert_item_test_specs() -> 
+    Items = ?Items,
+    [ { upsert_existing_first, [?CW123_1, Items], 
+	[ ?CW123_1, ?CW126, ?AP723, ?CW127, ?AP273, ?FD825, ?AP932, ?FD285 ]
+      },
+      { upsert_existing_last, [?FD285_1, Items], 
+	[ ?CW123, ?CW126, ?AP723, ?CW127, ?AP273, ?FD825, ?AP932, ?FD285_1 ]
+      },
+      { upsert_new, [?AP923_1, Items], 
+        [ ?CW123, ?CW126, ?AP723, ?CW127, ?AP273, ?FD825, ?AP932, ?FD285, 
+          ?AP923_1 ]
+      }
+    ].
+
+-ifdef(test_upsert_item).
+upsert_item_test_() ->
+    make_tests(fun upsert_item/2, upsert_item_test_specs()).
+-endif. %test_upsert_item
+
+(6)
+find_items(Preds, Items) ->
+    [Item || Item <- Items, lists:all(fun(P) -> P(Item) end, Preds)].
+find_items_test_specs() -> 
+  Items = ?Items,
+  [ { category_cookware, [ [item_has_category(cookware)], Items ], 
+      category_items3(cookware, Items) 
+    },
+    { apparel_2, [ [item_has_category(apparel), item_has_nunits(2)], Items ],
+      [ ?AP723, ?AP932 ]
+    },
+    { food_nunits_price, 
+      [ [ item_has_category(food), 
+	  item_has_nunits(2), 
+	  item_has_price(2.48)
+	], Items ],
+      [ ?FD825, ?FD285 ]
+    },
+    { sku, [ [item_has_sku(cw126)], Items ], [ ?CW126 ] },
+    { sku_nunits_none, 
+      [ [item_has_category(cw126), item_has_nunits(3)], Items ], 
+      [] 
+    },
+    { price, [ [item_has_price(2.48)], Items ], [?FD825, ?FD285] },
+    { price_none, [ [item_has_price(2.50)], Items ], [] },
+    { nunits, [ [item_has_nunits(2)], Items ], 
+      [?CW126, ?AP723, ?FD825, ?AP932, ?FD285] 
+    },
+    { nunits_none, [ [item_has_nunits(5)], Items ], [] }
+  ].
+
+-ifdef(test_find_items).
+find_items_test_() ->
+    make_tests(fun find_items/2, find_items_test_specs()).
+-endif. %test_find_items
+
+(7)
+items_req({delete, Sku}, Items) ->
+    {ok, void, delete_item(Sku, Items)};
+items_req(dump, Items) ->
+    {ok, Items, Items};
+items_req({find, Preds}, Items) ->
+    {ok, find_items(Preds, Items), Items};
+items_req({read, Sku}, Items) ->
+    Preds = [item_has_sku(Sku)],
+    case find_items(Preds, Items) of
+        [Result] ->
+            {ok, Items, Items};
+        _ ->
+            ErrString = lists:flatten(io_lib:format("no item with sku ~p", [Sku])),
+            {err, ErrString, Items}
+    end;
+items_req({upsert, Item}, Items) ->
+    {ok, void, upsert_item(Item, Items)};
+items_req(_, Items) ->
+    {err, "unsupported request", Items}.
+items_req_upsert_test_specs() ->
+  [ { Test, [ {upsert, Item}, Items ], { ok, void, Result } } ||
+    { Test, [Item, Items], Result } <- upsert_item_test_specs() ].
+
+
+
+items_req_delete_test_specs() ->
+  [ { Test, [ {delete, Name}, Items ], { ok, void, Result } } ||
+    { Test, [Name, Items], Result } <- delete_item_test_specs() ].
+
+items_req_find_test_specs() ->
+  [ { Test, [ {find, Preds}, Items ], { ok, Result, Items } } ||
+    { Test, [Preds, Items], Result } <- find_items_test_specs() ].
+
+ignore_err_message(Result) ->
+    case Result of
+      { Status, _Msg } -> { Status };
+      { Status, _Msg, Rest } -> { Status, Rest }
+    end.
+
+items_req_test_specs() ->
+    % since these specs are used also by server, keep mutable tests last
+    Items = ?Items,
+    [ { read_intermediate, [{ read, ap723 }, Items ], { ok, ?AP723, Items } },
+      { read_last, [ { read, fd285 }, Items ], { ok, ?FD285, Items } },
+      { dump, [ {dump}, Items ], { ok, Items, Items } },
+      { read_nonexisting, [ { read, fd999 }, Items ], {err, Items}, 
+	fun ignore_err_message/1 },
+      { bad_req, [ { read1, cw123 }, Items ], {err, Items}, 
+        fun ignore_err_message/1 
+      }
+    ] ++
+    items_req_find_test_specs() ++
+    items_req_upsert_test_specs() ++
+    items_req_delete_test_specs().
+
+-ifdef(test_items_req).
+items_req_test_() ->
+    make_tests(fun items_req/2, items_req_test_specs()).
+-endif. %test_items_req
+
+(8)
+items_req_with_sort({sort}, Items) ->
+    SortedItems = lists:sort(fun({_, {sku, _}}, {_, {sku, _}}) -> sku < sku end, Items),
+    {ok, void, SortedItems};
+items_req_with_sort(Req, Items) ->
+    items_req(Req, Items).
+items_req_with_sort_test_specs() ->
+    [{sort, [{sort}, ?Items], {ok, void, ?SortedItems}}] ++
+    items_req_test_specs().
+
+items_req_with_sort_extra_test_specs() ->
+    [{sort_single, [{sort}, [?CW123]], {ok, void, [?CW123]}},
+     {sort_empty, [{sort}, []], {ok, void, []}}] ++
+    items_req_with_sort_test_specs().
+
+-ifdef(test_items_req_with_sort).
+items_req_with_sort_test_() ->
+    Fn = fun items_req_with_sort/2,
+    make_tests(Fn, items_req_with_sort_extra_test_specs()).
+-endif.
+
+(9)
+
